@@ -47,6 +47,8 @@ describe provider_class do
 
   def before_hook(delete, missing, noproject, user_cached, project_only)
     set_env
+    domain_id_list = ['default', 'foo_domain_id', 'bar_domain_id',
+                      'another_domain_id', 'disabled_domain_id']
     unless noproject
       project_class.expects(:openstack).once
         .with('domain', 'list', '--quiet', '--format', 'csv', [])
@@ -83,23 +85,31 @@ describe provider_class do
       project = 'foo'
     end
     # delete will call the search again and should not return the deleted user
-    foo_returns = ['"ID","Name","Project Id","Domain","Description","Email","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo",' + project + ',"foo_domain_id","foo description","foo@example.com",True
-"2cb05cfed7c24279be884ba4f6520262","foo",' + project + ',"bar_domain_id","foo description","foo@example.com",True
-"3cb05cfed7c24279be884ba4f6520262","foo",' + project + ',"another_domain_id","foo description","foo@example.com",True
-'
-                  ]
-    nn = 1
-    if delete
-      nn = 2
-      foo_returns << ''
+    user_list_header = '"ID","Name","Project Id","Domain","Description","Email","Enabled"'
+    user_list_foo = user_list_header + "\n" + '"foo_user_id","foo",' + project + ',"foo_domain_id","foo description","foo@example.com",True' + "\n"
+    user_list_bar = user_list_header + "\n" + '"foo_user2_id","foo",' + project + ',"bar_domain_id","foo description","foo@example.com",True' + "\n"
+    user_list_another = user_list_header + "\n" + '"another_user_id","foo",' + project + ',"another_domain_id","foo description","foo@example.com",True' + "\n"
+    user_list_returns = {
+      'default'            => '',
+      'foo_domain_id'      => user_list_foo,
+      'bar_domain_id'      => user_list_bar,
+      'another_domain_id'  => user_list_another,
+      'disabled_domain_id' => ''
+    }
+    domain_id_list.each do |domain_id|
+      return_val = [user_list_returns[domain_id]]
+      nn = 1
+      if delete
+        nn = 2
+        return_val << ''
+      end
+      if missing
+        return_val = ['']
+      end
+      provider.class.expects(:openstack).times(nn)
+                    .with('user', 'list', '--quiet', '--format', 'csv', ['--long', '--domain', domain_id])
+                    .returns(*return_val)
     end
-    if missing
-      foo_returns = ['']
-    end
-    provider.class.expects(:openstack).times(nn)
-      .with('user', 'list', '--quiet', '--format', 'csv', ['--long'])
-      .returns(*foo_returns)
   end
 
   before :each, :default => true do
@@ -136,8 +146,8 @@ describe provider_class do
         project_class.expects(:openstack)
           .with('project', 'list', '--quiet', '--format', 'csv', '--long')
           .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","foo","bar_domain_id","foo",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","foo","bar_domain_id","foo",True
 '
                   )
         provider.class.expects(:openstack)
@@ -147,12 +157,12 @@ name="_member_"
 '
                   )
         provider.class.expects(:openstack)
-          .with('role', 'add', ['_member_', '--project', '2cb05cfed7c24279be884ba4f6520262', '--user', '12b23f07d4a3448d8189521ab09610b0'])
+          .with('role', 'add', ['_member_', '--project', 'foo_project2_id', '--user', 'foo_user_id'])
         provider.class.expects(:openstack)
           .with('user', 'create', '--format', 'shell', ['foo', '--enable', '--password', 'foo', '--email', 'foo@example.com', '--domain', 'foo_domain'])
           .returns('email="foo@example.com"
 enabled="True"
-id="12b23f07d4a3448d8189521ab09610b0"
+id="foo_user_id"
 name="foo"
 username="foo"
 '
@@ -185,6 +195,15 @@ username="foo"
 
     describe '#instances', :noproject => true do
       it 'finds every user' do
+        provider.class.expects(:openstack).once
+          .with('domain', 'list', '--quiet', '--format', 'csv', [])
+          .returns('"ID","Name","Enabled","Description"
+"default","Default",True,"default"
+"foo_domain_id","foo_domain",True,"foo domain"
+"bar_domain_id","bar_domain",True,"bar domain"
+"another_domain_id","another_domain",True,"another domain"
+"disabled_domain_id","disabled_domain",False,"disabled domain"
+')
         instances = provider.class.instances
         expect(instances.count).to eq(3)
         expect(instances[0].name).to eq('foo')
@@ -199,32 +218,32 @@ username="foo"
         project_class.expects(:openstack)
           .with('project', 'list', '--quiet', '--format', 'csv', '--long')
           .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","bar","bar_domain_id","bar",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","bar","bar_domain_id","bar",True
 '
                   )
         provider.class.expects(:openstack)
-          .with('project', 'list', '--quiet', '--format', 'csv', ['--user', '1cb05cfed7c24279be884ba4f6520262', '--long'])
+          .with('project', 'list', '--quiet', '--format', 'csv', ['--user', 'foo_user_id', '--long'])
           .returns('"ID","Name","Domain ID","Description","Enabled"
 "foo_project_id1","foo","foo_domain_id","",True
 '
                   )
-        provider.instance_variable_get('@property_hash')[:id] = '1cb05cfed7c24279be884ba4f6520262'
+        provider.instance_variable_get('@property_hash')[:id] = 'foo_user_id'
         tenant = provider.tenant
         expect(tenant).to eq('foo')
       end
 
       it 'gets the tenant with LDAP backend', :user_cached => true do
-        provider.instance_variable_get('@property_hash')[:id] = '1cb05cfed7c24279be884ba4f6520262'
+        provider.instance_variable_get('@property_hash')[:id] = 'foo_user_id'
         project_class.expects(:openstack)
           .with('project', 'list', '--quiet', '--format', 'csv', '--long')
           .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","bar","bar_domain_id","bar",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","bar","bar_domain_id","bar",True
 '
                   )
         provider.class.expects(:openstack)
-          .with('project', 'list', '--quiet', '--format', 'csv', ['--user', '1cb05cfed7c24279be884ba4f6520262', '--long'])
+          .with('project', 'list', '--quiet', '--format', 'csv', ['--user', 'foo_user_id', '--long'])
           .returns('"ID","Name","Domain ID","Description","Enabled"
 "foo_project_id1","foo","foo_domain_id","",True
 "bar_project_id2","bar","bar_domain_id","",True
@@ -238,78 +257,77 @@ username="foo"
     describe '#tenant=', :project_only => true do
       context 'when using default backend' do
         it 'sets the tenant' do
-          provider.instance_variable_get('@property_hash')[:id] = '1cb05cfed7c24279be884ba4f6520262'
+          provider.instance_variable_get('@property_hash')[:id] = 'foo_user_id'
           provider.instance_variable_get('@property_hash')[:domain] = 'foo_domain'
           project_class.expects(:openstack)
             .with('project', 'list', '--quiet', '--format', 'csv', '--long')
             .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","bar","bar_domain_id","bar",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","bar","bar_domain_id","bar",True
 '
                     )
           provider.class.expects(:openstack)
             .with('role', 'show', '--format', 'shell', '_member_')
             .returns('name="_member_"')
           provider.class.expects(:openstack)
-            .with('role', 'add', ['_member_', '--project', '2cb05cfed7c24279be884ba4f6520262', '--user', '1cb05cfed7c24279be884ba4f6520262'])
+            .with('role', 'add', ['_member_', '--project', 'foo_project2_id', '--user', 'foo_user_id'])
           provider.tenant=('bar')
         end
       end
       context 'when using LDAP read-write backend' do
         it 'sets the tenant when _member_ role exists' do
-          provider.instance_variable_get('@property_hash')[:id] = '1cb05cfed7c24279be884ba4f6520262'
+          provider.instance_variable_get('@property_hash')[:id] = 'foo_user_id'
           provider.instance_variable_get('@property_hash')[:domain] = 'foo_domain'
           project_class.expects(:openstack)
             .with('project', 'list', '--quiet', '--format', 'csv', '--long')
             .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","bar","bar_domain_id","bar",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","bar","bar_domain_id","bar",True
 '
                     )
           provider.class.expects(:openstack)
             .with('role', 'show', '--format', 'shell', '_member_')
             .returns('name="_member_"')
           provider.class.expects(:openstack)
-            .with('role', 'add', ['_member_', '--project', '2cb05cfed7c24279be884ba4f6520262', '--user', '1cb05cfed7c24279be884ba4f6520262'])
+            .with('role', 'add', ['_member_', '--project', 'foo_project2_id', '--user', 'foo_user_id'])
           provider.tenant=('bar')
         end
         it 'sets the tenant when _member_ role does not exist' do
-          provider.instance_variable_get('@property_hash')[:id] = '1cb05cfed7c24279be884ba4f6520262'
+          provider.instance_variable_get('@property_hash')[:id] = 'foo_user_id'
           provider.instance_variable_get('@property_hash')[:domain] = 'foo_domain'
           project_class.expects(:openstack)
             .with('project', 'list', '--quiet', '--format', 'csv', '--long')
             .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","bar","bar_domain_id","bar",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","bar","bar_domain_id","bar",True
 '
                     )
           provider.class.expects(:openstack)
             .with('role', 'show', '--format', 'shell', '_member_')
-            .raises(Puppet::ExecutionFailure, 'no such role _member_')
           provider.class.expects(:openstack)
             .with('role', 'create', '--format', 'shell', '_member_')
             .returns('name="_member_"')
           provider.class.expects(:openstack)
-            .with('role', 'add', ['_member_', '--project', '2cb05cfed7c24279be884ba4f6520262', '--user', '1cb05cfed7c24279be884ba4f6520262'])
+            .with('role', 'add', ['_member_', '--project', 'foo_project2_id', '--user', 'foo_user_id'])
           provider.tenant=('bar')
         end
       end
       context 'when using LDAP read-only backend', :nohooks => true do
         it 'sets the tenant when _member_ role exists' do
-          provider.instance_variable_get('@property_hash')[:id] = '1cb05cfed7c24279be884ba4f6520262'
+          provider.instance_variable_get('@property_hash')[:id] = 'foo_user_id'
           provider.instance_variable_get('@property_hash')[:domain] = 'foo_domain'
           project_class.expects(:openstack)
             .with('project', 'list', '--quiet', '--format', 'csv', '--long')
             .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","bar","bar_domain_id","bar",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","bar","bar_domain_id","bar",True
 '
                     )
           provider.class.expects(:openstack)
             .with('role', 'show', '--format', 'shell', '_member_')
             .returns('name="_member_"')
           provider.class.expects(:openstack)
-            .with('role', 'add', ['_member_', '--project', '2cb05cfed7c24279be884ba4f6520262', '--user', '1cb05cfed7c24279be884ba4f6520262'])
+            .with('role', 'add', ['_member_', '--project', 'foo_project2_id', '--user', 'foo_user_id'])
           provider.tenant=('bar')
         end
       end
@@ -338,16 +356,16 @@ username="foo"
     end
 
     it 'checks the password', :noproject_user_cached => true do
-      provider.instance_variable_get('@property_hash')[:id] = '1cb05cfed7c24279be884ba4f6520262'
+      provider.instance_variable_get('@property_hash')[:id] = 'foo_user_id'
       mock_creds = Puppet::Provider::Openstack::CredentialsV3.new
       mock_creds.auth_url='http://127.0.0.1:5000'
       mock_creds.password='foo'
       mock_creds.username='foo'
-      mock_creds.user_id='1cb05cfed7c24279be884ba4f6520262'
+      mock_creds.user_id='foo_user_id'
       mock_creds.project_id='project-id-1'
       Puppet::Provider::Openstack::CredentialsV3.expects(:new).returns(mock_creds)
       Puppet::Provider::Openstack.expects(:openstack)
-        .with('project', 'list', '--quiet', '--format', 'csv', ['--user', '1cb05cfed7c24279be884ba4f6520262', '--long'])
+        .with('project', 'list', '--quiet', '--format', 'csv', ['--user', 'foo_user_id', '--long'])
         .returns('"ID","Name","Domain ID","Description","Enabled"
 "project-id-1","foo","foo_domain_id","foo",True
 '
@@ -365,9 +383,9 @@ ac43ec53d5a74a0b9f51523ae41a29f0
     end
 
     it 'fails the password check', :noproject_user_cached => true do
-      provider.instance_variable_get('@property_hash')[:id] = '1cb05cfed7c24279be884ba4f6520262'
+      provider.instance_variable_get('@property_hash')[:id] = 'foo_user_id'
       Puppet::Provider::Openstack.expects(:openstack)
-        .with('project', 'list', '--quiet', '--format', 'csv', ['--user', '1cb05cfed7c24279be884ba4f6520262', '--long'])
+        .with('project', 'list', '--quiet', '--format', 'csv', ['--user', 'foo_user_id', '--long'])
         .returns('"ID","Name","Domain ID","Description","Enabled"
 "project-id-1","foo","foo_domain_id","foo",True
 '
@@ -380,17 +398,17 @@ ac43ec53d5a74a0b9f51523ae41a29f0
     end
 
     it 'checks the password with domain scoped token', :nohooks => true do
-      provider.instance_variable_get('@property_hash')[:id] = '1cb05cfed7c24279be884ba4f6520262'
+      provider.instance_variable_get('@property_hash')[:id] = 'foo_user_id'
       provider.instance_variable_get('@property_hash')[:domain] = 'foo_domain'
       mock_creds = Puppet::Provider::Openstack::CredentialsV3.new
       mock_creds.auth_url='http://127.0.0.1:5000'
       mock_creds.password='foo'
       mock_creds.username='foo'
-      mock_creds.user_id='1cb05cfed7c24279be884ba4f6520262'
+      mock_creds.user_id='foo_user_id'
       mock_creds.domain_name='foo_domain'
       Puppet::Provider::Openstack::CredentialsV3.expects(:new).returns(mock_creds)
       Puppet::Provider::Openstack.expects(:openstack)
-        .with('project', 'list', '--quiet', '--format', 'csv', ['--user', '1cb05cfed7c24279be884ba4f6520262', '--long'])
+        .with('project', 'list', '--quiet', '--format', 'csv', ['--user', 'foo_user_id', '--long'])
         .returns('"ID","Name","Domain ID","Description","Enabled"
 '
                 )
@@ -458,15 +476,15 @@ ac43ec53d5a74a0b9f51523ae41a29f0
       File.expects(:exists?).with('/etc/keystone/keystone.conf').returns(true)
       mock.expects(:read).with('/etc/keystone/keystone.conf')
       provider.class.expects(:openstack)
-        .with('project', 'list', '--quiet', '--format', 'csv', ['--user', '1cb05cfed7c24279be884ba4f6520262', '--long'])
+        .with('project', 'list', '--quiet', '--format', 'csv', ['--user', 'foo_user_id', '--long'])
         .returns('"ID","Name"
 '
                 )
       project_class.expects(:openstack)
         .with('project', 'list', '--quiet', '--format', 'csv', '--long')
         .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","bar","bar_domain_id","bar",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","bar","bar_domain_id","bar",True
 '
                 )
       provider.class.expects(:openstack)
@@ -476,19 +494,19 @@ name="_member_"
 '
                 )
       provider.class.expects(:openstack)
-        .with('role', 'add', ['_member_', '--project', '1cb05cfed7c24279be884ba4f6520262', '--user', '1cb05cfed7c24279be884ba4f6520262'])
+        .with('role', 'add', ['_member_', '--project', 'foo_project_id', '--user', 'foo_user_id'])
       provider.class.expects(:openstack)
         .with('user', 'create', '--format', 'shell', ['foo', '--enable', '--password', 'foo', '--email', 'foo@example.com', '--domain', 'foo_domain'])
         .returns('email="foo@example.com"
 enabled="True"
-id="1cb05cfed7c24279be884ba4f6520262"
+id="foo_user_id"
 name="foo"
 username="foo"
 '
                 )
       provider.create
       expect(provider.exists?).to be_truthy
-      expect(provider.id).to eq("1cb05cfed7c24279be884ba4f6520262")
+      expect(provider.id).to eq("foo_user_id")
     end
   end
 
@@ -509,8 +527,8 @@ username="foo"
       project_class.expects(:openstack)
         .with('project', 'list', '--quiet', '--format', 'csv', '--long')
         .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","bar","bar_domain_id","bar",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","bar","bar_domain_id","bar",True
 '
                 )
       provider.class.expects(:openstack)
@@ -520,19 +538,19 @@ name="_member_"
 '
                 )
       provider.class.expects(:openstack)
-        .with('role', 'add', ['_member_', '--project', '1cb05cfed7c24279be884ba4f6520262', '--user', '2cb05cfed7c24279be884ba4f6520262'])
+        .with('role', 'add', ['_member_', '--project', 'foo_project_id', '--user', 'foo_user2_id'])
       provider.class.expects(:openstack)
         .with('user', 'create', '--format', 'shell', ['foo', '--enable', '--password', 'foo', '--email', 'foo@example.com', '--domain', 'bar_domain'])
         .returns('email="foo@example.com"
 enabled="True"
-id="2cb05cfed7c24279be884ba4f6520262"
+id="foo_user2_id"
 name="foo"
 username="foo"
 '
                 )
       provider.create
       expect(provider.exists?).to be_truthy
-      expect(provider.id).to eq("2cb05cfed7c24279be884ba4f6520262")
+      expect(provider.id).to eq("foo_user2_id")
     end
   end
 
@@ -552,8 +570,8 @@ username="foo"
       project_class.expects(:openstack)
         .with('project', 'list', '--quiet', '--format', 'csv', '--long')
         .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","bar","bar_domain_id","bar",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","bar","bar_domain_id","bar",True
 '
                 )
       provider.class.expects(:openstack)
@@ -563,19 +581,19 @@ name="_member_"
 '
                 )
       provider.class.expects(:openstack)
-        .with('role', 'add', ['_member_', '--project', '1cb05cfed7c24279be884ba4f6520262', '--user', '2cb05cfed7c24279be884ba4f6520262'])
+        .with('role', 'add', ['_member_', '--project', 'foo_project_id', '--user', 'foo_user2_id'])
       provider.class.expects(:openstack)
         .with('user', 'create', '--format', 'shell', ['foo', '--enable', '--password', 'foo', '--email', 'foo@example.com', '--domain', 'bar_domain'])
         .returns('email="foo@example.com"
 enabled="True"
-id="2cb05cfed7c24279be884ba4f6520262"
+id="foo_user2_id"
 name="foo"
 username="foo"
 '
                 )
       provider.create
       expect(provider.exists?).to be_truthy
-      expect(provider.id).to eq("2cb05cfed7c24279be884ba4f6520262")
+      expect(provider.id).to eq("foo_user2_id")
       expect(provider.name).to eq('foo::bar_domain')
     end
   end
@@ -597,8 +615,8 @@ username="foo"
       project_class.expects(:openstack)
         .with('project', 'list', '--quiet', '--format', 'csv', '--long')
         .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","bar","bar_domain_id","bar",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","bar","bar_domain_id","bar",True
 '
                 )
       provider.class.expects(:openstack)
@@ -608,19 +626,19 @@ name="_member_"
 '
                 )
       provider.class.expects(:openstack)
-        .with('role', 'add', ['_member_', '--project', '1cb05cfed7c24279be884ba4f6520262', '--user', '2cb05cfed7c24279be884ba4f6520262'])
+        .with('role', 'add', ['_member_', '--project', 'foo_project_id', '--user', 'foo_user2_id'])
       provider.class.expects(:openstack)
         .with('user', 'create', '--format', 'shell', ['foo', '--enable', '--password', 'foo', '--email', 'foo@example.com', '--domain', 'foo_domain'])
         .returns('email="foo@example.com"
 enabled="True"
-id="2cb05cfed7c24279be884ba4f6520262"
+id="foo_user2_id"
 name="foo"
 username="foo"
 '
                 )
       provider.create
       expect(provider.exists?).to be_truthy
-      expect(provider.id).to eq("2cb05cfed7c24279be884ba4f6520262")
+      expect(provider.id).to eq("foo_user2_id")
       expect(provider.name).to eq('foo::bar_domain')
     end
   end
@@ -642,8 +660,8 @@ username="foo"
       project_class.expects(:openstack)
         .with('project', 'list', '--quiet', '--format', 'csv', '--long')
         .returns('"ID","Name","Domain ID","Description","Enabled"
-"1cb05cfed7c24279be884ba4f6520262","foo","foo_domain_id","foo",True
-"2cb05cfed7c24279be884ba4f6520262","foo","bar_domain_id","foo",True
+"foo_project_id","foo","foo_domain_id","foo",True
+"foo_project2_id","foo","bar_domain_id","foo",True
 '
                 )
       provider.class.expects(:openstack)
@@ -653,19 +671,19 @@ name="_member_"
 '
                 )
       provider.class.expects(:openstack)
-        .with('role', 'add', ['_member_', '--project', '1cb05cfed7c24279be884ba4f6520262', '--user', '2cb05cfed7c24279be884ba4f6520262'])
+        .with('role', 'add', ['_member_', '--project', 'foo_project_id', '--user', 'foo_user2_id'])
       provider.class.expects(:openstack)
         .with('user', 'create', '--format', 'shell', ['foo', '--enable', '--password', 'foo', '--email', 'foo@example.com', '--domain', 'foo_domain'])
         .returns('email="foo@example.com"
 enabled="True"
-id="2cb05cfed7c24279be884ba4f6520262"
+id="foo_user2_id"
 name="foo"
 username="foo"
 '
                 )
       provider.create
       expect(provider.exists?).to be_truthy
-      expect(provider.id).to eq("2cb05cfed7c24279be884ba4f6520262")
+      expect(provider.id).to eq("foo_user2_id")
       expect(provider.name).to eq('foo::bar_domain')
     end
   end
