@@ -1,6 +1,6 @@
 require 'spec_helper_acceptance'
 
-describe 'keystone server running with Apache/WSGI with resources' do
+describe 'keystone server running with Apache/WSGI as Identity Provider' do
 
   context 'default parameters' do
 
@@ -12,29 +12,25 @@ describe 'keystone server running with Apache/WSGI with resources' do
       case $::osfamily {
         'Debian': {
           include ::apt
-          class { '::openstack_extras::repo::debian::ubuntu':
-            release         => 'liberty',
-            repo            => 'proposed',
-            package_require => true,
+          apt::ppa { 'ppa:ubuntu-cloud-archive/liberty-staging':
+            # it's false by default in 2.x series but true in 1.8.x
+            package_manage => false,
           }
+          Exec['apt_update'] -> Package<||>
         }
         'RedHat': {
           class { '::openstack_extras::repo::redhat::redhat':
             manage_rdo => false,
             repo_hash => {
-              'openstack-common-testing' => {
-                'baseurl'  => 'http://cbs.centos.org/repos/cloud7-openstack-common-testing/x86_64/os/',
-                'descr'    => 'openstack-common-testing',
+              # we need kilo repo to be installed for dependencies
+              'rdo-kilo' => {
+                'baseurl' => 'https://repos.fedorapeople.org/repos/openstack/openstack-kilo/el7/',
+                'descr'   => 'RDO kilo',
                 'gpgcheck' => 'no',
               },
-              'openstack-liberty-testing' => {
-                'baseurl'  => 'http://cbs.centos.org/repos/cloud7-openstack-liberty-testing/x86_64/os/',
-                'descr'    => 'openstack-liberty-testing',
-                'gpgcheck' => 'no',
-              },
-              'openstack-liberty-trunk' => {
-                'baseurl'  => 'http://trunk.rdoproject.org/centos7-liberty/current-passed-ci/',
-                'descr'    => 'openstack-liberty-trunk',
+              'rdo-liberty' => {
+                'baseurl'  => 'http://trunk.rdoproject.org/centos7/current/',
+                'descr'    => 'RDO trunk',
                 'gpgcheck' => 'no',
               },
             },
@@ -73,8 +69,9 @@ describe 'keystone server running with Apache/WSGI with resources' do
         email                  => 'test@example.tld',
         password               => 'a_big_secret',
       }
-      # Default Keystone endpoints use localhost, default ports and v2.0
       class { '::keystone::endpoint':
+        public_url     => "http://127.0.0.1:5000/",
+        admin_url      => "http://127.0.0.1:35357/",
         default_domain => 'admin',
       }
       ::keystone::resource::service_identity { 'beaker-ci':
@@ -135,6 +132,11 @@ describe 'keystone server running with Apache/WSGI with resources' do
         internal_url        => 'http://127.0.0.1:1234/v3',
         user_domain         => 'service_domain',
         project_domain      => 'service_domain',
+      }
+      class { '::keystone::federation::identity_provider':
+        idp_entity_id     => 'http://127.0.0.1:5000/v3/OS-FEDERATION/saml2/idp',
+        idp_sso_endpoint  => 'http://127.0.0.1:5000/v3/OS-FEDERATION/saml2/sso',
+        idp_metadata_path => '/etc/keystone/saml2_idp_metadata.xml',
       }
       EOS
 

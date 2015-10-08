@@ -40,7 +40,7 @@ describe 'basic keystone server with resources' do
                 'gpgcheck' => 'no',
               },
               'openstack-liberty-trunk' => {
-                'baseurl'  => 'http://trunk.rdoproject.org/centos7-liberty/current/',
+                'baseurl'  => 'http://trunk.rdoproject.org/centos7-liberty/current-passed-ci/',
                 'descr'    => 'openstack-liberty-trunk',
                 'gpgcheck' => 'no',
               },
@@ -74,9 +74,8 @@ describe 'basic keystone server with resources' do
         email                  => 'test@example.tld',
         password               => 'a_big_secret',
       }
+      # Default Keystone endpoints use localhost, default ports and v2.0
       class { '::keystone::endpoint':
-        public_url     => "http://127.0.0.1:5000/",
-        admin_url      => "http://127.0.0.1:35357/",
         default_domain => 'admin',
       }
       ::keystone::resource::service_identity { 'beaker-ci':
