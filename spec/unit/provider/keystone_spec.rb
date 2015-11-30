@@ -123,6 +123,7 @@ describe Puppet::Provider::Keystone do
       home = ENV['HOME']
       ENV.clear
       File.expects(:exists?).with("#{home}/openrc").returns(false)
+      File.expects(:exists?).with('/root/openrc').returns(false)
       File.expects(:exists?).with("/etc/keystone/keystone.conf").returns(false)
       expect(klass.get_auth_url).to be_nil
     end
