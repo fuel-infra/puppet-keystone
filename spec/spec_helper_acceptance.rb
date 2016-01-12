@@ -1,5 +1,6 @@
 require 'beaker-rspec'
 require 'beaker/puppet_install_helper'
+require 'shared_examples_acceptance'
 
 run_puppet_install_helper
 
@@ -54,3 +55,5 @@ RSpec.configure do |c|
     end
   end
 end
+
+Dir[File.dirname(__FILE__) + '/support/**/*.rb'].each { |f| require f }

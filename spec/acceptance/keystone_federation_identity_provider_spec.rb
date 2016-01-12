@@ -6,74 +6,11 @@ describe 'keystone server running with Apache/WSGI as Identity Provider' do
 
     it 'should work with no errors' do
       pp= <<-EOS
-      Exec { logoutput => 'on_failure' }
+      include ::openstack_integration
+      include ::openstack_integration::repos
+      include ::openstack_integration::mysql
+      include ::openstack_integration::keystone
 
-      # Common resources
-      case $::osfamily {
-        'Debian': {
-          include ::apt
-          apt::ppa { 'ppa:ubuntu-cloud-archive/liberty-staging':
-            # it's false by default in 2.x series but true in 1.8.x
-            package_manage => false,
-          }
-          Exec['apt_update'] -> Package<||>
-        }
-        'RedHat': {
-          class { '::openstack_extras::repo::redhat::redhat':
-            manage_rdo => false,
-            repo_hash => {
-              # we need kilo repo to be installed for dependencies
-              'rdo-kilo' => {
-                'baseurl' => 'https://repos.fedorapeople.org/repos/openstack/openstack-kilo/el7/',
-                'descr'   => 'RDO kilo',
-                'gpgcheck' => 'no',
-              },
-              'rdo-liberty' => {
-                'baseurl'  => 'http://trunk.rdoproject.org/centos7/current/',
-                'descr'    => 'RDO trunk',
-                'gpgcheck' => 'no',
-              },
-            },
-          }
-          package { 'openstack-selinux': ensure => 'latest' }
-        }
-        default: {
-          fail("Unsupported osfamily (${::osfamily})")
-        }
-      }
-
-      class { '::mysql::server': }
-
-      # Keystone resources
-      class { '::keystone::client': }
-      class { '::keystone::cron::token_flush': }
-      class { '::keystone::db::mysql':
-        password => 'keystone',
-      }
-      class { '::keystone':
-        verbose             => true,
-        debug               => true,
-        database_connection => 'mysql://keystone:keystone@127.0.0.1/keystone',
-        admin_token         => 'admin_token',
-        enabled             => true,
-        service_name        => 'httpd',
-        default_domain      => 'default_domain',
-      }
-      include ::apache
-      class { '::keystone::wsgi::apache':
-        ssl => false,
-      }
-
-      # "v2" admin and service
-      class { '::keystone::roles::admin':
-        email                  => 'test@example.tld',
-        password               => 'a_big_secret',
-      }
-      class { '::keystone::endpoint':
-        public_url     => "http://127.0.0.1:5000/",
-        admin_url      => "http://127.0.0.1:35357/",
-        default_domain => 'admin',
-      }
       ::keystone::resource::service_identity { 'beaker-ci':
         service_type        => 'beaker',
         service_description => 'beaker service',
@@ -95,38 +32,34 @@ describe 'keystone server running with Apache/WSGI as Identity Provider' do
         enabled     => true,
         description => 'Domain for admin v3 users',
       }
-      keystone_tenant { 'servicesv3':
+      keystone_tenant { 'servicesv3::service_domain':
         ensure      => present,
         enabled     => true,
         description => 'Tenant for the openstack services',
-        domain      => 'service_domain',
       }
-      keystone_tenant { 'openstackv3':
+      keystone_tenant { 'openstackv3::admin_domain':
         ensure      => present,
         enabled     => true,
         description => 'admin tenant',
-        domain      => 'admin_domain',
       }
-      keystone_user { 'adminv3':
+      keystone_user { 'adminv3::admin_domain':
         ensure      => present,
         enabled     => true,
-        tenant      => 'openstackv3', # note: don't have to use 'openstackv3::admin_domain' here since the tenant name 'openstackv3' is unique among all domains
         email       => 'test@example.tld',
         password    => 'a_big_secret',
-        domain      => 'admin_domain',
       }
-      keystone_user_role { 'adminv3@openstackv3':
+      keystone_user_role { 'adminv3::admin_domain@openstackv3::admin_domain':
         ensure => present,
         roles  => ['admin'],
       }
       # service user exists only in the service_domain - must
       # use v3 api
-      ::keystone::resource::service_identity { 'beaker-civ3':
+      ::keystone::resource::service_identity { 'beaker-civ3::service_domain':
         service_type        => 'beakerv3',
         service_description => 'beakerv3 service',
         service_name        => 'beakerv3',
         password            => 'secret',
-        tenant              => 'servicesv3',
+        tenant              => 'servicesv3::service_domain',
         public_url          => 'http://127.0.0.1:1234/v3',
         admin_url           => 'http://127.0.0.1:1234/v3',
         internal_url        => 'http://127.0.0.1:1234/v3',
@@ -232,11 +165,11 @@ describe 'keystone server running with Apache/WSGI as Identity Provider' do
     end
     describe 'with v2 admin with v3 credentials' do
       include_examples 'keystone user/tenant/service/role/endpoint resources using v3 API',
-                       '--os-username admin --os-password a_big_secret --os-project-name openstack --os-user-domain-name default_domain --os-project-domain-name default_domain'
+                       '--os-username admin --os-password a_big_secret --os-project-name openstack --os-user-domain-name Default --os-project-domain-name Default'
     end
     describe "with v2 service with v3 credentials" do
       include_examples 'keystone user/tenant/service/role/endpoint resources using v3 API',
-                       '--os-username beaker-ci --os-password secret --os-project-name services --os-user-domain-name default_domain --os-project-domain-name default_domain'
+                       '--os-username beaker-ci --os-password secret --os-project-name services --os-user-domain-name Default --os-project-domain-name Default'
     end
     describe 'with v3 admin with v3 credentials' do
       include_examples 'keystone user/tenant/service/role/endpoint resources using v3 API',
