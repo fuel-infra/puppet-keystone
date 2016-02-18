@@ -32,9 +32,9 @@ describe 'keystone' do
       'use_stderr'                          => true,
       'catalog_type'                        => 'sql',
       'catalog_driver'                      => false,
-      'token_provider'                      => 'keystone.token.providers.uuid.Provider',
-      'token_driver'                        => 'keystone.token.persistence.backends.sql.Token',
-      'revoke_driver'                       => 'keystone.contrib.revoke.backends.sql.Revoke',
+      'token_provider'                      => 'uuid',
+      'token_driver'                        => 'sql',
+      'revoke_driver'                       => 'sql',
       'revoke_by_id'                        => true,
       'cache_dir'                           => '/var/cache/keystone',
       'memcache_servers'                    => '<SERVICE DEFAULT>',
@@ -52,7 +52,7 @@ describe 'keystone' do
       'manage_service'                      => true,
       'database_connection'                 => 'sqlite:////var/lib/keystone/keystone.db',
       'database_idle_timeout'               => '200',
-      'enable_pki_setup'                    => true,
+      'enable_pki_setup'                    => false,
       'signing_certfile'                    => '/etc/keystone/ssl/certs/signing_cert.pem',
       'signing_keyfile'                     => '/etc/keystone/ssl/private/signing_key.pem',
       'signing_ca_certs'                    => '/etc/keystone/ssl/certs/ca.pem',
@@ -79,9 +79,9 @@ describe 'keystone' do
       'debug'                               => true,
       'use_stderr'                          => false,
       'catalog_type'                        => 'template',
-      'token_provider'                      => 'keystone.token.providers.uuid.Provider',
-      'token_driver'                        => 'keystone.token.backends.kvs.Token',
-      'revoke_driver'                       => 'keystone.contrib.revoke.backends.kvs.Revoke',
+      'token_provider'                      => 'uuid',
+      'token_driver'                        => 'kvs',
+      'revoke_driver'                       => 'kvs',
       'revoke_by_id'                        => false,
       'public_endpoint'                     => 'https://localhost:5000/v2.0/',
       'admin_endpoint'                      => 'https://localhost:35357/v2.0/',
@@ -105,6 +105,7 @@ describe 'keystone' do
       'rabbit_userid'                       => 'admin',
       'rabbit_heartbeat_timeout_threshold'  => '60',
       'rabbit_heartbeat_rate'               => '10',
+      'rabbit_ha_queues'                    => true,
       'default_domain'                      => 'other_domain',
       'using_domain_config'                 => false
     }
@@ -237,6 +238,15 @@ describe 'keystone' do
       end
     end
 
+    it 'should ensure rabbit_ha_queues' do
+      if param_hash['rabbit_ha_queues']
+        is_expected.to contain_keystone_config('oslo_messaging_rabbit/rabbit_ha_queues').with_value(param_hash['rabbit_ha_queues'])
+      else
+        is_expected.to contain_keystone_config('oslo_messaging_rabbit/rabbit_ha_queues').with_value(false)
+      end
+
+    end
+
     if param_hash['default_domain']
       it { is_expected.to contain_keystone_domain(param_hash['default_domain']).with(:is_default => true) }
       it { is_expected.to contain_anchor('default_domain_created') }
@@ -289,6 +299,9 @@ describe 'keystone' do
       'validate'        => false
     )}
     it { is_expected.to contain_service('keystone').with_before(/Service\[#{platform_parameters[:httpd_service_name]}\]/) }
+    it { is_expected.to contain_exec('restart_keystone').with(
+      'command' => "service #{platform_parameters[:httpd_service_name]} restart",
+    ) }
   end
 
   describe 'when using invalid service name for keystone' do
@@ -322,9 +335,6 @@ describe 'keystone' do
           'token_provider' => 'keystone.token.providers.uuid.Provider'
         }
       end
-      it { is_expected.to contain_exec('keystone-manage pki_setup').with(
-        :creates => '/etc/keystone/ssl/private/signing_key.pem'
-      ) }
       it { is_expected.to contain_file('/var/cache/keystone').with_ensure('directory') }
 
       describe 'when overriding the cache dir' do
@@ -334,10 +344,7 @@ describe 'keystone' do
         it { is_expected.to contain_file('/var/lib/cache/keystone') }
       end
 
-      describe 'when disable pki_setup' do
-        before do
-          params.merge!(:enable_pki_setup => false)
-        end
+      describe 'pki_setup is disabled by default' do
         it { is_expected.to_not contain_exec('keystone-manage pki_setup') }
       end
     end
@@ -345,8 +352,9 @@ describe 'keystone' do
     describe 'when configuring as PKI' do
       let :params do
         {
-          'admin_token'    => 'service_token',
-          'token_provider' => 'keystone.token.providers.pki.Provider'
+          'enable_pki_setup' => true,
+          'admin_token'      => 'service_token',
+          'token_provider'   => 'keystone.token.providers.pki.Provider'
         }
       end
       it { is_expected.to contain_exec('keystone-manage pki_setup').with(
@@ -359,13 +367,6 @@ describe 'keystone' do
           params.merge!(:cache_dir => '/var/lib/cache/keystone')
         end
         it { is_expected.to contain_file('/var/lib/cache/keystone') }
-      end
-
-      describe 'when disable pki_setup' do
-        before do
-          params.merge!(:enable_pki_setup => false)
-        end
-        it { is_expected.to_not contain_exec('keystone-manage pki_setup') }
       end
     end
 
@@ -925,12 +926,6 @@ describe 'keystone' do
   end
 
   shared_examples_for "when configuring default domain" do
-    describe 'with default config' do
-      let :params do
-        default_params
-      end
-      it { is_expected.to_not contain_exec('restart_keystone') }
-    end
     describe 'with default domain and eventlet service is managed and enabled' do
       let :params do
         default_params.merge({
@@ -952,9 +947,6 @@ describe 'keystone' do
           'service_name'  => 'httpd',
         })
       end
-      it { is_expected.to contain_exec('restart_keystone').with(
-        'command' => "service #{platform_parameters[:httpd_service_name]} restart",
-      ) }
       it { is_expected.to contain_anchor('default_domain_created') }
     end
     describe 'with default domain and service is not managed' do

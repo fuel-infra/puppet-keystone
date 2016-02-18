@@ -175,7 +175,7 @@
 #   revocation lists if it doesn't already exist. This generates a cert and key stored in file
 #   locations based on the signing_certfile and signing_keyfile paramters below. If you are
 #   providing your own signing cert, make this false.
-#   Default to true.
+#   Default to false.
 #
 # [*signing_certfile*]
 #   (optional) Location of the cert file for signing pki tokens and revocation lists.
@@ -218,6 +218,10 @@
 # [*rabbit_hosts*]
 #   (optional) Location of rabbitmq installation.
 #   Defaults to $::os_service_default
+#
+# [*rabbit_ha_queues*]
+#   (Optional) Use HA queues in RabbitMQ.
+#   Defaults to undef.
 #
 # [*rabbit_password*]
 #   (optional) Password used to connect to rabbitmq.
@@ -551,7 +555,7 @@ class keystone(
   $database_min_pool_size             = undef,
   $database_max_pool_size             = undef,
   $database_max_overflow              = undef,
-  $enable_pki_setup                   = true,
+  $enable_pki_setup                   = false,
   $signing_certfile                   = '/etc/keystone/ssl/certs/signing_cert.pem',
   $signing_keyfile                    = '/etc/keystone/ssl/private/signing_key.pem',
   $signing_ca_certs                   = '/etc/keystone/ssl/certs/ca.pem',
@@ -567,6 +571,7 @@ class keystone(
   $rabbit_heartbeat_timeout_threshold = $::os_service_default,
   $rabbit_heartbeat_rate              = $::os_service_default,
   $rabbit_use_ssl                     = $::os_service_default,
+  $rabbit_ha_queues                   = undef,
   $kombu_ssl_ca_certs                 = $::os_service_default,
   $kombu_ssl_certfile                 = $::os_service_default,
   $kombu_ssl_keyfile                  = $::os_service_default,
@@ -828,14 +833,22 @@ class keystone(
   if ! is_service_default($rabbit_hosts) and $rabbit_hosts {
     keystone_config {
       'oslo_messaging_rabbit/rabbit_hosts':     value => join($rabbit_hosts, ',');
-      'oslo_messaging_rabbit/rabbit_ha_queues': value => true;
     }
   } else {
     keystone_config {
       'oslo_messaging_rabbit/rabbit_host':      value => $rabbit_host;
       'oslo_messaging_rabbit/rabbit_port':      value => $rabbit_port;
-      'oslo_messaging_rabbit/rabbit_ha_queues': value => false;
       'oslo_messaging_rabbit/rabbit_hosts':     ensure => absent;
+    }
+  }
+
+  if $rabbit_ha_queues != undef {
+    keystone_config { 'oslo_messaging_rabbit/rabbit_ha_queues': value => $rabbit_ha_queues }
+  } else {
+    if ! is_service_default($rabbit_hosts) and $rabbit_hosts {
+      keystone_config { 'oslo_messaging_rabbit/rabbit_ha_queues': value => true }
+    } else {
+      keystone_config { 'oslo_messaging_rabbit/rabbit_ha_queues': value => false }
     }
   }
 
@@ -959,6 +972,21 @@ class keystone(
     'fernet_tokens/max_active_keys': value => $fernet_max_active_keys;
   }
 
+  # Update this code when https://bugs.launchpad.net/keystone/+bug/1472285 is addressed.
+  # 1/ Keystone needs to be started before creating the default domain
+  # 2/ Once the default domain is created, we can query Keystone to get the default domain ID
+  # 3/ The Keystone_domain provider has in charge of doing the query and configure keystone.conf
+  # 4/ After such a change, we need to restart Keystone service.
+  # restart_keystone exec is doing 4/, it restart Keystone if we have a new default domain setted
+  # and if we manage the service to be enabled.
+  if $manage_service and $enabled {
+    exec { 'restart_keystone':
+      path        => ['/usr/sbin', '/usr/bin', '/sbin', '/bin/'],
+      command     => "service ${service_name_real} restart",
+      refreshonly => true,
+    }
+  }
+
   if $default_domain {
     keystone_domain { $default_domain:
       ensure     => present,
@@ -969,20 +997,6 @@ class keystone(
     }
     anchor { 'default_domain_created':
       require => Keystone_domain[$default_domain],
-    }
-    # Update this code when https://bugs.launchpad.net/keystone/+bug/1472285 is addressed.
-    # 1/ Keystone needs to be started before creating the default domain
-    # 2/ Once the default domain is created, we can query Keystone to get the default domain ID
-    # 3/ The Keystone_domain provider has in charge of doing the query and configure keystone.conf
-    # 4/ After such a change, we need to restart Keystone service.
-    # restart_keystone exec is doing 4/, it restart Keystone if we have a new default domain setted
-    # and if we manage the service to be enabled.
-    if $manage_service and $enabled {
-      exec { 'restart_keystone':
-        path        => ['/usr/sbin', '/usr/bin', '/sbin', '/bin/'],
-        command     => "service ${service_name_real} restart",
-        refreshonly => true,
-      }
     }
   }
   if $domain_config_directory != '/etc/keystone/domains' and !$using_domain_config {
